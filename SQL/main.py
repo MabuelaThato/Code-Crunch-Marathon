@@ -5,50 +5,81 @@ def main():
     db_path = os.path.join(BASE_DIR, "fiftyville.db")
     with sqlite3.connect(db_path) as db:
         cur = db.cursor()
-        # GET REPORTS
-        #reports = cur.execute("SELECT * FROM crime_scene_reports WHERE year = 2023 AND month = 7 AND day = 28 AND street = 'Humphrey Street'")
-        #print(reports.fetchall())
 
-        # GET INTERVEWS
-        # interviews = cur.execute("SELECT transcript FROM interviews WHERE year = 2023 AND month = 7 AND day = 28")
-        # for interview in interviews.fetchall():
-        #     if "bakery" in interview[0]:
-        #         print(interview)
-        
-        parking_query = """
-            SELECT DISTINCT f.destination_airport_id, p.name, p.id
-            FROM bakery_security_logs AS s
-            JOIN people AS p ON s.license_plate = p.license_plate
-            JOIN passengers AS pass ON p.passport_number = pass.passport_number
-            JOIN flights AS f ON pass.flight_id = f.id
-            WHERE s.year = 2023 AND s.month = 7 AND s.day = 28
-            AND s.hour = 10 AND s.minute > 15 AND s.minute < 26
-            AND s.activity = 'exit'
-            AND f.year = 2023 AND f.month = 7 AND f.day = 29
-            AND f.origin_airport_id = ?
-            ORDER BY f.hour ASC, f.minute ASC
-            LIMIT 1
-        """
+    bank_accounts = cur.execute("SELECT account_number FROM atm_transactions WHERE year = 2023 AND month = 7 AND day = 28 AND transaction_type = 'withdraw'").fetchall()
 
-        airport = cur.execute("SELECT id FROM airports WHERE city = 'Fiftyville'")
-        airport_id = airport.fetchone()[0]
-        result = cur.execute(parking_query, (airport_id,)).fetchone()
+    ids = [] # IDS OF PEOPLE WHO WITHDREW ON THE DAY OF THE ROBBERY
+    person_ids = cur.execute("SELECT account_number ,person_id FROM bank_accounts").fetchall()
+    for item in person_ids:
+        account_no  = item[0]
+        person_id = item[1]
+        for account in bank_accounts:
+            if account[0] == account_no:
+                ids.append(person_id)
 
-        if result:
-            destination_id = result[0]
-            passenger_name = result[1]
-            destination = cur.execute("SELECT full_name FROM airports WHERE id = ?", (destination_id,))
-            destination_airport = destination.fetchone()[0]
-            print("Destination Airport:", destination_airport)
-            print("Thief name:", passenger_name)
-        else:
-            print("No matching flights found.")
-       
-        thief_cell = cur.execute("SELECT phone_number FROM people WHERE id = ?", (result[2],)).fetchall()[0]
+    # GET PASSPORTS OF PEOPLE WHO LEFT BAKERY WITHIN 10 MINUTES AFTER ROBBERY
+    passports = cur.execute("SELECT passport_number FROM people WHERE license_plate IN (SELECT license_plate FROM bakery_security_logs WHERE year = 2023 AND month = 7 AND day = 28 AND hour = 10 AND minute > 15 AND minute < 26 AND activity = 'exit')").fetchall()
+    passports = [passport[0] for passport in passports]
+    
+    #INFO OF PEOPLE WHO CALLED FOR LESS THAN 60s AND LEFT BAKER WITHIN 10 MINUTES
+    people = []
+    all_people = cur.execute("SELECT * FROM people WHERE phone_number IN (SELECT caller FROM phone_calls WHERE year = 2023 AND month = 7 AND day = 28 AND duration < 60 )").fetchall()
+    
+    for person in all_people:
+        if person[3] in passports:
+            people.append(person)
 
-        partner_cell = cur.execute("SELECT receiver FROM phone_calls WHERE duration < 60 AND caller = ?", thief_cell).fetchone()
-        partner_name = cur.execute("SELECT name FROM people WHERE phone_number = ?", partner_cell).fetchall()[0]
-        print("The thief's partner's name is:",partner_name[0])
+    # INFOR OF PEOPLE WHO WITHDEW AND CALLED FOR LESS THAN 60s AND LEFT BAKER WITHIN 10 MINUTES
+    people2 = []
+    people2_passports = []
 
-if __name__ == "__main__":
-    main()
+    for person in people:
+        if person[0] in ids:
+            people2.append(person)
+            people2_passports.append(person[3])
+
+    #FLIGHTS THAT HAPPENED THE NEXT DAY FROM FIFTYVILLE
+    airport_id = cur.execute("SELECT id FROM airports WHERE city = 'Fiftyville'").fetchone()
+
+    # GET FLIGHTS FOLLOWING DAY
+    flights = cur.execute("SELECT id,destination_airport_id FROM flights WHERE year = 2023 AND month = 7 AND day = 29 AND origin_airport_id = ? ORDER BY hour ASC, minute ASC", airport_id).fetchall()
+    flight_ids = [flight[0] for flight in flights]
+
+    placeholders = ', '.join(['?'] * len(people2_passports))
+    query = f"SELECT flight_id FROM passengers WHERE passport_number IN ({placeholders})"
+    passengers = cur.execute(query, tuple(people2_passports)).fetchall()
+    passengers = [passenger[0] for passenger in passengers]
+  
+    # GET CORRECT FLIGHT ID
+    correct_flight = 0
+    for id in flight_ids:
+        if id in passengers:
+            correct_flight += id
+            break
+
+    # GET DESTINATION PLACE
+    destination_id = 0
+    for flight in flights:
+        if correct_flight == flight[0]:
+            destination_id += flight[1]
+            break
+    destination = cur.execute("SELECT city FROM airports WHERE id = ?", (destination_id,)).fetchone()
+
+    # GET THIEF PASSPORT NUMBER
+    query = f"SELECT passport_number FROM passengers WHERE flight_id = ? AND passport_number IN ({placeholders})"
+    thief_passport = cur.execute(query,(correct_flight,) + tuple(people2_passports)).fetchone()
+
+    # GET THIEF DETAILS
+    thief = cur.execute("SELECT name, phone_number FROM people WHERE passport_number = ?",thief_passport).fetchone()
+
+    # GET ACCOMPLICE PHONE NUMBER
+    partner_num = cur.execute("SELECT receiver FROM phone_calls WHERE year = 2023 AND month = 7 AND day = 28 AND duration < 60 AND caller = ?", (thief[1],)).fetchone()
+
+    # GET PARTNER Name
+    partner = cur.execute("SELECT name FROM people WHERE phone_number = ?",partner_num).fetchone()
+
+    print("The thief is :", thief[0])
+    print("The accomplice is :", partner[0])
+    print("City thief escaped to :", destination[0])
+    
+main()
